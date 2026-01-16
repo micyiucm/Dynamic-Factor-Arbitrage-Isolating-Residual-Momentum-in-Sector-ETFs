@@ -1,5 +1,10 @@
 # Dynamic Factor Arbitrage: Isolating Residual Momentum in Sector ETFs
 
+![Python](https://img.shields.io/badge/Python-3.12%2B-blue)
+![JAX](https://img.shields.io/badge/JAX-Accelerated-green)
+![License](https://img.shields.io/badge/License-MIT-purple)
+
+
 This is a quantitative finance research project that explores **statistical arbitrage** in U.S. equity sector ETFs by extracting tradable signals from factor model residuals. We compare static PCA decomposition against an adaptive **Bayesian state-space model (SSM)** via Kalman filtering to capture time-varying factor exposures. The models are evaluated using a walk-forward validation approach.
 
 ---
@@ -39,7 +44,7 @@ The Kalman-filtered momentum strategy outperforms both static PCA approaches, su
   - XLU (Utilities)
   - SPY (S&P 500 benchmark)
 
-- **Period**: January 2012 – January 2026 (14 years of daily data)
+- **Period**: January 2012 – December 2025  (14 years of daily data)
 - **Returns**: Log returns $r_t = \ln(P_t / P_{t-1})$
 
 ### 2. Factor Model Architecture
@@ -163,7 +168,7 @@ The **innovation** $e_t$ serves as the trading signal, representing the componen
 │   ├── kalman_jax.py       # JAX-accelerated Kalman filter
 │   ├── backtest.py         # Backtesting engine with transaction costs
 │   └── run_walk_forward.py # Walk-forward validation framework
-├── data/
+├── data/                   # Generated files (not in repo)
 │   ├── etf_returns.csv     # Log returns (2012-2025)
 │   ├── walk_forward_config.csv  # Fold definitions
 │   └── experiment_results.csv   # Strategy performance metrics
