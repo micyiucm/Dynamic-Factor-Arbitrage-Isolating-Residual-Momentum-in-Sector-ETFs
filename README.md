@@ -1,6 +1,6 @@
 # Dynamic Factor Arbitrage: Isolating Residual Momentum in Sector ETFs
 
-This is a quantitative finance research project that explores **statistical arbitrage** in U.S. equity sector ETFs by extracting tradable signals from factor model residuals. We compare static PCA decomposition against an adaptive **Bayesian state-space model** to capture time-varying factor exposures. The models are evaluated using a walk-forward validation approach.
+This is a quantitative finance research project that explores **statistical arbitrage** in U.S. equity sector ETFs by extracting tradable signals from factor model residuals. We compare static PCA decomposition against an adaptive **Bayesian state-space model (SSM)** via Kalman filtering to capture time-varying factor exposures. The models are evaluated using a walk-forward validation approach.
 
 ---
 
@@ -20,15 +20,26 @@ Traditional factor models assume static betas (factor loadings), but real market
 | Fixed PCA (Momentum) | -0.03 | -5.2% | -48.8% |
 | Rolling PCA (Mean Reversion) | -0.85 | -81.7% | -82.7% |
 
-The Bayesian state-space momentum strategy significantly outperforms static approaches, suggesting that **residual persistence** (momentum) rather than mean-reversion drives alpha in the cross-section of sector ETFs.
+The Kalman-filtered momentum strategy outperforms both static PCA approaches, suggesting that **residual persistence** (momentum) rather than mean-reversion drives alpha in the universe of sector ETFs.
 
 ---
 
 ## Methodology
 
 ### 1. Universe & Data
-- **Assets**: 9 SPDR Select Sector ETFs (XLE, XLB, XLI, XLY, XLP, XLV, XLF, XLK, XLU) + SPY
-- **Period**: January 2012 – January 2025 (10+ years of daily data)
+- **Assets**: 9 SPDR Select Sector ETFs (XLE, XLB, XLI, XLY, XLP, XLV, XLF, XLK, XLU) + SPY:
+  - XLE (Energy)
+  - XLB (Materials)
+  - XLI (Industrials)
+  - XLY (Consumer Discretionary)
+  - XLP (Consumer Staples)
+  - XLV (Health Care)
+  - XLF (Financials)
+  - XLK (Technology)
+  - XLU (Utilities)
+  - SPY (S&P 500 benchmark)
+
+- **Period**: January 2012 – January 2026 (14 years of daily data)
 - **Returns**: Log returns $r_t = \ln(P_t / P_{t-1})$
 
 ### 2. Factor Model Architecture
@@ -49,7 +60,7 @@ Where:
 
 ### Principal Component Analysis (PCA)
 
-PCA extracts orthogonal factors that maximise explained variance. Given a returns matrix $\mathbf{R} \in \mathbb{R}^{T \times N}$:
+PCA extracts orthogonal factors that maximise explained variance. Given a returns matrix $\mathbf{R} \in \mathbb{R}^{T \times N}$,
 
 1. **Compute covariance matrix**: $\mathbf{\Sigma} = \frac{1}{T-1}(\mathbf{R} - \bar{\mathbf{R}})^\top(\mathbf{R} - \bar{\mathbf{R}})$
 
@@ -60,10 +71,12 @@ PCA extracts orthogonal factors that maximise explained variance. Given a return
 3. **Factor extraction**: Select top $K$ eigenvectors to form factor loadings matrix $\mathbf{W} \in \mathbb{R}^{N \times K}$
 
 4. **Residual computation**:
-$$\hat{\mathbf{R}}_t = \mathbf{F}_t \mathbf{W}^\top + \boldsymbol{\mu}$$
-$$\varepsilon_t = \mathbf{R}_t - \hat{\mathbf{R}}_t$$
 
-Where $\mathbf{F}_t = (\mathbf{R}_t - \boldsymbol{\mu})\mathbf{W}$ are the factor scores.
+$$\hat{\mathbf{R}}_t = \mathbf{F}_t \mathbf{W}^\top + \boldsymbol{\mu},$$
+
+$$\varepsilon_t = \mathbf{R}_t - \hat{\mathbf{R}}_t,$$
+
+where $\mathbf{F}_t = (\mathbf{R}_t - \boldsymbol{\mu})\mathbf{W}$ are the factor scores.
 
 #### Implementation Variants
 - **Fixed PCA**: Fit on training data, apply fixed loadings to test period
@@ -73,7 +86,7 @@ Where $\mathbf{F}_t = (\mathbf{R}_t - \boldsymbol{\mu})\mathbf{W}$ are the facto
 
 ### Bayesian State-Space Model via Kalman Filtering
 
-The Kalman filter enables **time-varying beta estimation**, modeling factor loadings as a random walk:
+The Kalman filter enables **time-varying beta estimation**, modelling factor loadings as a random walk:
 
 #### State-Space Representation
 
@@ -111,9 +124,9 @@ $$\hat{\boldsymbol{\beta}}_{t|t} = \hat{\boldsymbol{\beta}}_{t|t-1} + \mathbf{K}
 
 $$\mathbf{P}_{t|t} = \mathbf{P}_{t|t-1} - \mathbf{K}_t \mathbf{f}_t^\top \mathbf{P}_{t|t-1} \quad \text{(updated covariance)}$$
 
-The **innovation** $e_t$ serves as the trading signal—representing the component of returns unexplained by the adaptive factor model.
+The **innovation** $e_t$ serves as the trading signal, representing the component of returns unexplained by the adaptive factor model.
 
-#### Hyperparameter Interpretation
+#### Hyperparameter Interpretations
 | Parameter | Low Value | High Value |
 |-----------|-----------|------------|
 | $\delta$ (process noise) | Slow adaptation, stable betas | Fast adaptation, responsive to regime shifts |
@@ -160,7 +173,7 @@ The **innovation** $e_t$ serves as the trading signal—representing the compone
 ```
 
 ### Walk-Forward Validation
-To prevent lookahead bias, the framework uses **anchored walk-forward validation**:
+To prevent look-ahead bias, the framework uses **walk-forward validation**:
 - **Training window**: 3 years
 - **Test window**: 1 year
 - **Folds**: 10 non-overlapping test periods (2015–2025)
@@ -174,31 +187,52 @@ Fold 10: Train [2021-2024) → Test [2024-2025)
 
 ---
 
-## Quick Start
+## Installation and Setup
 
-### Installation
+### Prerequisites
+- Python 3.12+
+- Git
+
+### Installation Steps:
+
+1.  Clone repository
+
 ```bash
-# Clone repository
 git clone https://github.com/micyiucm/Dynamic-Factor-Arbitrage-Isolating-Residual-Momentum-in-Sector-ETFs.git
 cd Dynamic-Factor-Arbitrage-Isolating-Residual-Momentum-in-Sector-ETFs
+```
+2. Create and activate virtual environment
 
-# Create virtual environment
-python -m venv statarb
-source statarb/bin/activate  # On Windows: statarb\Scripts\activate
+```bash
+python -m venv .venv
+# On Linux/macOS
+source .venv/bin/activate
+# On Windows
+.\.venv\Scripts\activate
+```
 
-# Install dependencies
+3. Install dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
 ### Run Experiments
+
+1. Download data and generate returns
 ```bash
-# Step 1: Download data and generate returns
 python src/data_loader.py
+```
 
-# Step 2: Generate PCA residuals
+2. Generate PCA residuals
+
+```bash
 python src/static_pca.py
+```
 
-# Step 3: Run walk-forward validation (all strategies)
+3. Run walk-forward validation for all strategies
+
+```bash
 python src/run_walk_forward.py
 ```
 
