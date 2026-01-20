@@ -22,6 +22,10 @@ Backtest engine:
 - **One-day delay to avoid look-ahead bias**: signals are computed using data available by the end of day $t$, and the resulting weights are applied starting day $t+1$.
 - **Includes simple transaction costs**: 2 bps per one-way turnover by default.
 
+Strategies tested:
+
+The evaluation covers 22 long/short residual strategies across two residual sources (fixed PCA and rolling PCA) and two signals (mean-reversion and residual momentum), plus an adaptive residual variant where PCA factors are held fixed and Kalman filtering is used to track time-varying factor loadings. For the Kalman setup, a $3\times 3$ grid over the process/observation noise parameters ($\delta$, $v_e$) is run to see when dynamic loadings help relative to static PCA residuals.
+
 ---
 
 ## Summary Results
