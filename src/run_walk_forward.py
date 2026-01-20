@@ -3,6 +3,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 from sklearn.decomposition import PCA
 from backtest import Backtester
 from kalman_jax import KalmanFilterJAX
@@ -16,7 +17,7 @@ COST_BPS = 0.0002  # 2 bps
 N_FACTORS = 3
 ROLLING_WINDOW = 60
 KALMAN_DELTAS = [1e-4, 1e-3, 1e-2]
-KALMAN_VES = [1e-4, 1e-3]
+KALMAN_VES = [1e-4, 1e-3, 1e-2]
 
 def load_data():
     """
@@ -65,6 +66,10 @@ def calc_max_drawdown(wealth: pd.Series) -> float:
         wealth: Cumulative wealth series (not log returns)
     Returns:
         Maximum drawdown as negative percentage (e.g., -0.25 = -25% loss)
+    Math:
+        MaxDD = min_t[(W_t - P_t) / P_t], where
+        W_t = wealth at time t
+        P_t = max(W_s for s <= t) = peak up to time t
     """
     # Track running maximum (peaks)
     peaks = wealth.cummax()
@@ -80,41 +85,55 @@ def calc_cagr(log_returns: pd.Series) -> float:
         log_returns: Series of daily log returns
     Returns:
         CAGR as decimal (e.g., 0.15 = 15% annualized)
+    Math:
+        CAGR = exp(sum(r_t) / T) - 1, where
+        r_t = daily log return at time t
+        T = number of years = n_days / 252
     """
     years = len(log_returns) / 252
     if years == 0:
         return 0.0
     return np.exp(log_returns.sum() / years) - 1
 
+
+def calc_var_es(simple_returns: pd.Series, confidence: float = 0.95) -> tuple:
+    """
+    Calculate Value at Risk (VaR) and Expected Shortfall (ES) on simple returns.
+
+    Returns (VaR, ES) as negative decimals (e.g., -0.05 = -5% one-day loss).
+    """
+    if simple_returns.empty:
+        return 0.0, 0.0
+
+    var = simple_returns.quantile(1 - confidence)
+    tail_losses = simple_returns[simple_returns <= var]
+    es = tail_losses.mean() if not tail_losses.empty else var
+    return var, es
+
 def calc_metrics(net_pnl: pd.Series, gross_pnl: pd.Series, turnover: pd.Series) -> dict:
-    """
-    Calculate comprehensive performance metrics from PnL series.
-    Parameters:
-        net_pnl: Net log returns after transaction costs
-        gross_pnl: Gross log returns before transaction costs
-        turnover: Daily turnover (sum of absolute position changes)
-    Returns:
-        Dictionary of performance metrics
-    """
+    """Calculate comprehensive performance metrics from PnL series."""
     if net_pnl.empty:
         return {
             "Total_Return": 0.0,
             "Sharpe": 0.0,
             "MaxDD": 0.0,
+            "VaR_95": 0.0,
+            "ES_95": 0.0,
             "Avg_Turnover": 0.0,
             "Cost_Impact": 0.0,
         }
-    # Convert log returns to cumulative wealth
+
+    # Existing metrics (net_pnl is log return series)
     wealth = np.exp(net_pnl.cumsum())
-    # Total return = final wealth - 1
     total_return = wealth.iloc[-1] - 1
-    # Calculate Sharpe ratio from net returns
     sharpe = calc_sharpe(net_pnl)
-    # Calculate maximum drawdown
     max_dd = calc_max_drawdown(wealth)
-    # Calculate average daily turnover
     avg_turnover = turnover.mean() if not turnover.empty else 0.0
-    # Calculate cost impact (performance drag from transaction costs)
+
+    # VaR / ES should be computed on SIMPLE returns
+    net_simple = np.expm1(net_pnl)
+    var_95, es_95 = calc_var_es(net_simple, confidence=0.95)
+
     gross_return = np.exp(gross_pnl.sum()) - 1 if not gross_pnl.empty else total_return
     cost_impact = gross_return - total_return
 
@@ -122,6 +141,8 @@ def calc_metrics(net_pnl: pd.Series, gross_pnl: pd.Series, turnover: pd.Series) 
         "Total_Return": total_return,
         "Sharpe": sharpe,
         "MaxDD": max_dd,
+        "VaR_95": var_95,
+        "ES_95": es_95,
         "Avg_Turnover": avg_turnover,
         "Cost_Impact": cost_impact,
     }
@@ -143,8 +164,8 @@ def run_walk_forward_strategy(
     """
     Execute walk-forward validation for a single strategy configuration.
     
-    For each fold: trains factor model on training period, generates residuals
-    for test period, executes trading strategy, and collects performance metrics.
+    For each fold: trains factor model on training period, generates residuals, then
+    executes trading strategy on test period and collects performance metrics.
     
     Parameters:
         name: Strategy name for display
@@ -161,7 +182,7 @@ def run_walk_forward_strategy(
         print_summary: Whether to print aggregate metrics
     
     Returns:
-        tuple: (stitched PnL series, aggregate metrics dict, fold table DataFrame)
+        tuple: (concatenated PnL series, aggregate metrics dict, fold table DataFrame)
     """
     print(f"\n--- Running Walk-Forward: {name} ---")
     if use_kalman and pca_mode != "fixed":
@@ -194,16 +215,16 @@ def run_walk_forward_strategy(
         test_start, test_end = row["Test_Start"], row["Test_End"]
 
         # 2. Slice Data
-        # We need TRAIN data to fit the PCA and warm-start the Kalman
+        # We need training data to fit the PCA and warm-start the Kalman
         train_data = returns.loc[train_start:train_end]
         test_data = returns.loc[test_start:test_end]
 
         if len(train_data) < ROLLING_WINDOW or len(test_data) == 0:
             continue
 
-        # --- STEP 3: GENERATE FACTORS & RESIDUALS ---
+        # 3. Generate factors and residuals
         if use_kalman:
-            # Fit PCA on TRAIN only, apply to TEST for Kalman factors
+            # Fit PCA on train only, apply to test for Kalman factors
             pca = PCA(n_components=N_FACTORS)
             pca.fit(train_data)
             if delta is None or ve is None:
@@ -218,7 +239,7 @@ def run_walk_forward_strategy(
         else:
             test_residuals = residuals_source.loc[test_start:test_end]
 
-        # --- STEP 4: EXECUTION ---
+        # 4. Execute trading strategy
         pnl, _, components = tester.run(
             test_data,
             test_residuals,
@@ -239,6 +260,8 @@ def run_walk_forward_strategy(
             "Total_Return": metrics["Total_Return"],
             "Sharpe": metrics["Sharpe"],
             "MaxDD": metrics["MaxDD"],
+            "VaR_95": metrics["VaR_95"],
+            "ES_95": metrics["ES_95"],
             "Avg_Turnover": metrics["Avg_Turnover"],
             "Cost_Impact": metrics["Cost_Impact"],
         })
@@ -267,6 +290,8 @@ def run_walk_forward_strategy(
                     "Total_Return": "{:.2%}".format,
                     "Sharpe": "{:.2f}".format,
                     "MaxDD": "{:.2%}".format,
+                    "VaR_95": "{:.2%}".format,
+                    "ES_95": "{:.2%}".format,
                     "Avg_Turnover": "{:.3f}".format,
                     "Cost_Impact": "{:.2%}".format,
                 },
@@ -279,6 +304,8 @@ def run_walk_forward_strategy(
         print(f"CAGR:           {cagr:.2%}")
         print(f"Sharpe:         {agg_metrics['Sharpe']:.2f}")
         print(f"Max Drawdown:   {agg_metrics['MaxDD']:.2%}")
+        print(f"VaR 95%:        {agg_metrics['VaR_95']:.2%}")
+        print(f"ES 95%:         {agg_metrics['ES_95']:.2%}")
         print(f"Avg Turnover:   {agg_metrics['Avg_Turnover']:.3f}")
         print(f"Cost Impact:    {agg_metrics['Cost_Impact']:.2%}")
 
@@ -331,8 +358,8 @@ def main():
     print("Signal rationale: residuals reflect model deviations, so mean-reversion is the primary signal; momentum is a robustness check.")
 
     experiments = build_experiments()
-    results_to_plot = {}
     summary_rows = []
+    exp_results = {}
 
     for exp in experiments:
         net_pnl, metrics, _ = run_walk_forward_strategy(
@@ -350,6 +377,12 @@ def main():
             print_summary=exp.get("print_summary", True),
         )
 
+        exp_results[exp["name"]] = {
+            "pnl": net_pnl,
+            "metrics": metrics,
+            "kalman": exp.get("use_kalman", False),
+        }
+
         summary_rows.append({
             "Strategy": exp["name"],
             "PCA": exp["pca_mode"],
@@ -361,50 +394,101 @@ def main():
             "CAGR": metrics["CAGR"],
             "Sharpe": metrics["Sharpe"],
             "MaxDD": metrics["MaxDD"],
+            "VaR_95": metrics["VaR_95"],
+            "ES_95": metrics["ES_95"],
             "Avg_Turnover": metrics["Avg_Turnover"],
             "Cost_Impact": metrics["Cost_Impact"],
         })
 
-        if exp.get("plot", False) and not net_pnl.empty:
-            results_to_plot[exp["name"]] = net_pnl
-
     summary_df = pd.DataFrame(summary_rows)
     print("\nExperiment Summary:")
+    # In run_walk_forward.py
     print(
         summary_df.to_string(
             index=False,
             formatters={
                 "Total_Return": "{:.2%}".format,
-                "CAGR": "{:.2%}".format,
                 "Sharpe": "{:.2f}".format,
                 "MaxDD": "{:.2%}".format,
+                "VaR_95": "{:.2%}".format,      # NEW
+                "ES_95": "{:.2%}".format,       # NEW
                 "Avg_Turnover": "{:.3f}".format,
                 "Cost_Impact": "{:.2%}".format,
-                "Delta": "{:.1e}".format,
-                "VE": "{:.1e}".format,
             },
         )
     )
     summary_df.to_csv("data/experiment_results.csv", index=False)
     print("Results saved to data/experiment_results.csv")
     
-    # --- PLOTTING ---
-    if results_to_plot:
-        plt.figure(figsize=(12, 6))
-        for name, pnl in results_to_plot.items():
+    # Plotting graphs
+    # Base strategies requested for plotting
+    base_plot_names = [
+        "Fixed PCA | MeanRev",
+        "Fixed PCA | Momentum",
+        "Rolling PCA | MeanRev",
+        "Rolling PCA | Momentum",
+    ]
+
+    selected_names = []
+    for name in base_plot_names:
+        res = exp_results.get(name)
+        if res and not res["pnl"].empty:
+            selected_names.append(name)
+
+    # Add best/worst Kalman by Sharpe if available
+    kalman_df = summary_df[summary_df["Kalman"] == True]
+    if not kalman_df.empty:
+        best_row = kalman_df.loc[kalman_df["Sharpe"].idxmax()]
+        worst_row = kalman_df.loc[kalman_df["Sharpe"].idxmin()]
+        for row in (best_row, worst_row):
+            name = row["Strategy"]
+            res = exp_results.get(name)
+            if res and not res["pnl"].empty and name not in selected_names:
+                selected_names.append(name)
+
+    os.makedirs("figures", exist_ok=True)
+
+    def short_label(name: str) -> str:
+        name = name.replace("Fixed PCA |", "PCA")
+        name = name.replace("Rolling PCA |", "RollPCA")
+        name = name.replace("Fixed PCA + Kalman |", "PCA+KF")
+        name = name.replace("MeanRev", "MR")
+        name = name.replace("Momentum", "MOM")
+        name = name.replace("ve=", "R=")   # optional: R = observation noise
+        name = name.replace("d=", "Q=")    # optional: Q = process noise
+        return name
+
+    if selected_names:
+        fig, ax = plt.subplots(figsize=(12, 5))
+
+        for name in selected_names:
+            res = exp_results[name]
+            pnl = res["pnl"]
             if pnl.empty:
                 continue
 
             wealth = np.exp(pnl.cumsum())
-            sharpe = calc_sharpe(pnl)
-            ret = wealth.iloc[-1] - 1
+            ax.plot(wealth.index, wealth, label=short_label(name), linewidth=1.8)
 
-            plt.plot(wealth.index, wealth, label=f"{name} | Ret: {ret:.1%} | Sharpe: {sharpe:.2f}")
+        ax.set_title("Walk-forward cumulative wealth (selected strategies)")
+        ax.set_ylabel("Cumulative wealth")
+        ax.grid(True, alpha=0.25)
 
-        plt.title("Walk-Forward Validation (Ablations)")
-        plt.ylabel("Cumulative Wealth")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
+        # Put legend below plot so it doesn't cover lines
+        ax.legend(
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.18),
+            ncol=2,
+            frameon=False,
+            fontsize=9,
+        )
+
+        fig.tight_layout()
+        fig.subplots_adjust(bottom=0.25)
+
+        # Save performance graph as png
+        fig.savefig("figures/wealth_curves.png", dpi=220, bbox_inches="tight")
+
         plt.show()
 
 if __name__ == "__main__":
