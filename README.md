@@ -1,4 +1,4 @@
-# Dynamic Factor Arbitrage in Sector ETFs (Residual Mean Reversion vs Momentum)
+# Adaptive Factor Models for Sector ETF Long/Short Trading: Kalman vs PCA
 
 ![Python](https://img.shields.io/badge/Python-3.12%2B-blue)
 ![JAX](https://img.shields.io/badge/JAX-green)
